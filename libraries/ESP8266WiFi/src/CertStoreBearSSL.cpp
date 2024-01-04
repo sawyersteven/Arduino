@@ -21,7 +21,7 @@
 #include <memory>
 
 
-#if defined(DEBUG_ESP_SSL) && defined(DEBUG_ESP_PORT)
+#ifdef DEBUG_ESP_SSL
 #define DEBUG_BSSL(fmt, ...)  DEBUG_ESP_PORT.printf_P((PGM_P)PSTR( "BSSL:" fmt), ## __VA_ARGS__)
 #else
 #define DEBUG_BSSL(...)
@@ -37,12 +37,6 @@ extern "C" {
   }
 }
 
-
-CertStore::~CertStore() {
-  free(_indexName);
-  free(_dataName);
-}
-
 CertStore::CertInfo CertStore::_preprocessCert(uint32_t length, uint32_t offset, const void *raw) {
   CertStore::CertInfo ci;
 
@@ -50,13 +44,9 @@ CertStore::CertInfo CertStore::_preprocessCert(uint32_t length, uint32_t offset,
   memset(&ci, 0, sizeof(ci));
 
   // Process it using SHA256, same as the hashed_dn
-  br_x509_decoder_context *ctx = new (std::nothrow) br_x509_decoder_context;
-  br_sha256_context *sha256 = new (std::nothrow) br_sha256_context;
+  br_x509_decoder_context *ctx = new br_x509_decoder_context;
+  br_sha256_context *sha256 = new br_sha256_context;
   if (!ctx || !sha256) {
-    if (ctx)
-      delete ctx;
-    if (sha256)
-      delete sha256;
     DEBUG_BSSL("CertStore::_preprocessCert: OOM\n");
     return ci;
   }
@@ -80,58 +70,46 @@ CertStore::CertInfo CertStore::_preprocessCert(uint32_t length, uint32_t offset,
 
 // The certs.ar file is a UNIX ar format file, concatenating all the 
 // individual certificates into a single blob in a space-efficient way.
-int CertStore::initCertStore(fs::FS &fs, const char *indexFileName, const char *dataFileName) {
+int CertStore::initCertStore(CertStoreFile *index, CertStoreFile *data) {
   int count = 0;
   uint32_t offset = 0;
 
-  _fs = &fs;
+  _index = index;
+  _data = data;
 
-  // In case initCertStore called multiple times, don't leak old filenames
-  free(_indexName);
-  free(_dataName);
-
-  // No strdup_P, so manually do it
-  _indexName = (char *)malloc(strlen_P(indexFileName) + 1);
-  _dataName = (char *)malloc(strlen_P(dataFileName) + 1);
-  if (!_indexName || !_dataName) {
-    free(_indexName);
-    free(_dataName);
-    return 0;
-  }
-  memcpy_P(_indexName, indexFileName, strlen_P(indexFileName) + 1);
-  memcpy_P(_dataName, dataFileName, strlen_P(dataFileName) + 1);
-
-  fs::File index = _fs->open(_indexName, "w");
-  if (!index) {
+  if (!_index || !data) {
     return 0;
   }
 
-  fs::File data = _fs->open(_dataName, "r");
-  if (!data) {
-    index.close();
+  if (!_index->open(true)) {
     return 0;
   }
 
-  uint8_t magic[8];
-  if (data.read(magic, sizeof(magic)) != sizeof(magic) ||
+  if (!_data->open(false)) {
+    _index->close();
+    return 0;
+  }
+
+  char magic[8];
+  if (_data->read(magic, sizeof(magic)) != sizeof(magic) ||
       memcmp(magic, "!<arch>\n", sizeof(magic)) ) {
-    data.close();
-    index.close();
+    _data->close();
+    _index->close();
     return 0;
   }
   offset += sizeof(magic);
 
   while (true) {
-    uint8_t fileHeader[60];
+    char fileHeader[60];
     // 0..15 = filename in ASCII
     // 48...57 = length in decimal ASCII
-    int32_t length;
-    if (data.read(fileHeader, sizeof(fileHeader)) != sizeof(fileHeader)) {
+    uint32_t length;
+    if (data->read(fileHeader, sizeof(fileHeader)) != sizeof(fileHeader)) {
       break;
     }
     offset += sizeof(fileHeader);
     fileHeader[58] = 0;
-    if (1 != sscanf((char *)(fileHeader + 48), "%d", &length) || !length) {
+    if (1 != sscanf(fileHeader + 48, "%d", &length) || !length) {
       break;
     }
 
@@ -139,7 +117,7 @@ int CertStore::initCertStore(fs::FS &fs, const char *indexFileName, const char *
     if (!raw) {
       break;
     }
-    if (data.read((uint8_t *)raw, length) != length) {
+    if (_data->read(raw, length) != (ssize_t)length) {
       free(raw);
       break;
     }
@@ -147,7 +125,7 @@ int CertStore::initCertStore(fs::FS &fs, const char *indexFileName, const char *
     // If the filename starts with "//" then this is a rename file, skip it
     if (fileHeader[0] != '/' || fileHeader[1] != '/') {
       CertStore::CertInfo ci = _preprocessCert(length, offset, raw);
-      if (index.write((uint8_t *)&ci, sizeof(ci)) != (ssize_t)sizeof(ci)) {
+      if (_index->write(&ci, sizeof(ci)) != (ssize_t)sizeof(ci)) {
         free(raw);
         break;
       }
@@ -157,13 +135,13 @@ int CertStore::initCertStore(fs::FS &fs, const char *indexFileName, const char *
     offset += length;
     free(raw);
     if (offset & 1) {
-      uint8_t x;
-      data.read(&x, 1);
+      char x;
+      _data->read(&x, 1);
       offset++;
     }
   }
-  data.close();
-  index.close();
+  _data->close();
+  _index->close();
   return count;
 }
 
@@ -175,38 +153,36 @@ const br_x509_trust_anchor *CertStore::findHashedTA(void *ctx, void *hashed_dn, 
   CertStore *cs = static_cast<CertStore*>(ctx);
   CertStore::CertInfo ci;
 
-  if (!cs || len != sizeof(ci.sha256) || !cs->_indexName || !cs->_dataName || !cs->_fs) {
+  if (!cs || len != sizeof(ci.sha256) || !cs->_index || !cs->_data) {
     return nullptr;
   }
 
-  fs::File index = cs->_fs->open(cs->_indexName, "r");
-  if (!index) {
+  if (!cs->_index->open(false)) {
     return nullptr;
   }
 
-  while (index.read((uint8_t *)&ci, sizeof(ci)) == sizeof(ci)) {
+  while (cs->_index->read(&ci, sizeof(ci)) == sizeof(ci)) {
     if (!memcmp(ci.sha256, hashed_dn, sizeof(ci.sha256))) {
-      index.close();
+      cs->_index->close();
       uint8_t *der = (uint8_t*)malloc(ci.length);
       if (!der) {
         return nullptr;
       }
-      fs::File data = cs->_fs->open(cs->_dataName, "r");
-      if (!data) {
+      if (!cs->_data->open(false)) {
         free(der);
         return nullptr;
       }
-      if (!data.seek(ci.offset, fs::SeekSet)) {
-        data.close();
+      if (!cs->_data->seek(ci.offset)) {
+        cs->_data->close();
         free(der);
         return nullptr;
       }
-      if (data.read(der, ci.length) != (int)ci.length) {
+      if (cs->_data->read(der, ci.length) != (ssize_t)ci.length) {
         free(der);
         return nullptr;
       }
-      data.close();
-      cs->_x509 = new (std::nothrow) X509List(der, ci.length);
+      cs->_data->close();
+      cs->_x509 = new X509List(der, ci.length);
       free(der);
       if (!cs->_x509) {
         DEBUG_BSSL("CertStore::findHashedTA: OOM\n");
@@ -220,7 +196,7 @@ const br_x509_trust_anchor *CertStore::findHashedTA(void *ctx, void *hashed_dn, 
       return ta;
     }
   }
-  index.close();
+  cs->_index->close();
   return nullptr;
 }
 

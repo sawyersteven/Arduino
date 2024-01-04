@@ -20,10 +20,12 @@
   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
+#define LWIP_INTERNAL
 
-extern "C" {
-    #include "osapi.h"
-    #include "ets_sys.h"
+extern "C"
+{
+#include "osapi.h"
+#include "ets_sys.h"
 }
 
 #include "debug.h"
@@ -35,115 +37,86 @@ extern "C" {
 #include "lwip/inet.h"
 #include <include/ClientContext.h>
 
-#ifndef MAX_PENDING_CLIENTS_PER_PORT
-#define MAX_PENDING_CLIENTS_PER_PORT 5
-#endif
-
-WiFiServer::WiFiServer(const IPAddress& addr, uint16_t port)
-: _port(port)
-, _addr(addr)
+WiFiServer::WiFiServer(const IPAddress &addr, uint16_t port)
+    : _port(port), _addr(addr), _pcb(nullptr), _unclaimed(nullptr), _discarded(nullptr)
 {
 }
 
 WiFiServer::WiFiServer(uint16_t port)
-: _port(port)
-, _addr(IP_ANY_TYPE)
+    : _port(port), _addr(IP_ANY_TYPE), _pcb(nullptr), _unclaimed(nullptr), _discarded(nullptr)
 {
 }
 
-void WiFiServer::begin() {
-	begin(_port);
+void WiFiServer::begin()
+{
+    begin(_port);
 }
 
-void WiFiServer::begin(uint16_t port) {
-    return begin(port, MAX_PENDING_CLIENTS_PER_PORT);
-}
-
-void WiFiServer::begin(uint16_t port, uint8_t backlog) {
+void WiFiServer::begin(uint16_t port)
+{
     close();
-    if (!backlog)
-        return;
     _port = port;
-    tcp_pcb* pcb = tcp_new();
+    err_t err;
+    tcp_pcb *pcb = tcp_new();
     if (!pcb)
         return;
 
     pcb->so_options |= SOF_REUSEADDR;
 
     // (IPAddress _addr) operator-converted to (const ip_addr_t*)
-    if (tcp_bind(pcb, _addr, _port) != ERR_OK) {
+    err = tcp_bind(pcb, _addr, _port);
+
+    if (err != ERR_OK)
+    {
         tcp_close(pcb);
         return;
     }
 
-    tcp_pcb* listen_pcb = tcp_listen_with_backlog(pcb, backlog);
-
-    if (!listen_pcb) {
+    tcp_pcb *listen_pcb = tcp_listen(pcb);
+    if (!listen_pcb)
+    {
         tcp_close(pcb);
         return;
     }
-    _listen_pcb = listen_pcb;
-    _port = _listen_pcb->local_port;
+    _pcb = listen_pcb;
     tcp_accept(listen_pcb, &WiFiServer::_s_accept);
-    tcp_arg(listen_pcb, (void*) this);
+    tcp_arg(listen_pcb, (void *)this);
 }
 
-void WiFiServer::setNoDelay(bool nodelay) {
-    _noDelay = nodelay? _ndTrue: _ndFalse;
+void WiFiServer::setNoDelay(bool nodelay)
+{
+    _noDelay = nodelay ? _ndTrue : _ndFalse;
 }
 
-bool WiFiServer::getNoDelay() {
+bool WiFiServer::getNoDelay()
+{
     switch (_noDelay)
     {
-    case _ndFalse: return false;
-    case _ndTrue: return true;
-    default: return WiFiClient::getDefaultNoDelay();
+    case _ndFalse:
+        return false;
+    case _ndTrue:
+        return true;
+    default:
+        return WiFiClient::getDefaultNoDelay();
     }
 }
 
-bool WiFiServer::hasClient() {
+bool WiFiServer::hasClient()
+{
     if (_unclaimed)
         return true;
     return false;
 }
 
-size_t WiFiServer::hasClientData() {
-    ClientContext *next = _unclaimed;
-    while (next) {
-        size_t s = next->getSize();
-        // return the amount of data available from the first connection that has any
-        if (s) return s;
-        next = next->next();
-    }
-    return 0;
-}
-
-bool WiFiServer::hasMaxPendingClients() {
-#if TCP_LISTEN_BACKLOG
-    return ((struct tcp_pcb_listen *)_listen_pcb)->accepts_pending >= MAX_PENDING_CLIENTS_PER_PORT;
-#else
-    return false;
-#endif
-}
-
-WiFiClient WiFiServer::available(byte* status) {
-    (void) status;
-    return accept();
-}
-
-WiFiClient WiFiServer::accept() {
-    if (_unclaimed) {
+WiFiClient WiFiServer::available(byte *status)
+{
+    (void)status;
+    if (_unclaimed)
+    {
         WiFiClient result(_unclaimed);
-
-        // pcb can be null when peer has already closed the connection
-        if (_unclaimed->getPCB()) {
-            // give permission to lwIP to accept one more peer
-            tcp_backlog_accepted(_unclaimed->getPCB());
-        }
-
         _unclaimed = _unclaimed->next();
         result.setNoDelay(getNoDelay());
-        DEBUGV("WS:av status=%d WCav=%d\r\n", result.status(), result.available());
+        DEBUGV("WS:av\r\n");
         return result;
     }
 
@@ -151,69 +124,77 @@ WiFiClient WiFiServer::accept() {
     return WiFiClient();
 }
 
-uint8_t WiFiServer::status()  {
-    if (!_listen_pcb)
+uint8_t WiFiServer::status()
+{
+    if (!_pcb)
         return CLOSED;
-    return _listen_pcb->state;
+    return _pcb->state;
 }
 
-uint16_t WiFiServer::port() const {
-    return _port;
-}
-
-void WiFiServer::close() {
-    if (!_listen_pcb) {
-      return;
+void WiFiServer::close()
+{
+    if (!_pcb)
+    {
+        return;
     }
-    tcp_close(_listen_pcb);
-    _listen_pcb = nullptr;
+    tcp_close(_pcb);
+    _pcb = nullptr;
 }
 
-void WiFiServer::stop() {
+void WiFiServer::stop()
+{
     close();
 }
 
-template<typename T>
-T* slist_append_tail(T* head, T* item) {
+size_t WiFiServer::write(uint8_t b)
+{
+    return write(&b, 1);
+}
+
+size_t WiFiServer::write(const uint8_t *buffer, size_t size)
+{
+    // write to all clients
+    // not implemented
+    (void)buffer;
+    (void)size;
+    return 0;
+}
+
+template <typename T>
+T *slist_append_tail(T *head, T *item)
+{
     if (!head)
         return item;
-    T* last = head;
-    while(last->next())
+    T *last = head;
+    while (last->next())
         last = last->next();
     last->next(item);
     return head;
 }
 
-err_t WiFiServer::_accept(tcp_pcb* apcb, err_t err) {
-    (void) err;
+long WiFiServer::_accept(tcp_pcb *apcb, long err)
+{
+    (void)err;
     DEBUGV("WS:ac\r\n");
-
-    // always accept new PCB so incoming data can be stored in our buffers even before
-    // user calls ::available()
-    ClientContext* client = new ClientContext(apcb, &WiFiServer::_s_discard, this);
-
-    // backlog doc:
-    // http://lwip.100.n7.nabble.com/Problem-re-opening-listening-pbc-tt32484.html#a32494
-    // https://www.nongnu.org/lwip/2_1_x/group__tcp__raw.html#gaeff14f321d1eecd0431611f382fcd338
-
-    // increase lwIP's backlog
-    tcp_backlog_delayed(apcb);
-
+    ClientContext *client = new ClientContext(apcb, &WiFiServer::_s_discard, this);
     _unclaimed = slist_append_tail(_unclaimed, client);
-
+    tcp_accepted(_pcb);
     return ERR_OK;
 }
 
-void WiFiServer::_discard(ClientContext* client) {
-    (void) client;
+void WiFiServer::_discard(ClientContext *client)
+{
+    (void)client;
     // _discarded = slist_append_tail(_discarded, client);
     DEBUGV("WS:dis\r\n");
 }
 
-err_t WiFiServer::_s_accept(void *arg, tcp_pcb* newpcb, err_t err) {
-    return reinterpret_cast<WiFiServer*>(arg)->_accept(newpcb, err);
+int WiFiServer::_s_accept(void *arg, tcp_pcb *newpcb, int err)
+{
+    return reinterpret_cast<WiFiServer *>(arg)->_accept(newpcb, err);
 }
 
-void WiFiServer::_s_discard(void* server, ClientContext* ctx) {
-    reinterpret_cast<WiFiServer*>(server)->_discard(ctx);
+void WiFiServer::_s_discard(void *server, ClientContext *ctx)
+{
+    reinterpret_cast<WiFiServer *>(server)->_discard(ctx);
 }

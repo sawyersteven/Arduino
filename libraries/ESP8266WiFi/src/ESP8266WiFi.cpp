@@ -49,24 +49,24 @@ extern "C" {
  * @param p Print interface
  */
 void ESP8266WiFiClass::printDiag(Print& p) {
-    const char* const modes[] = { "NULL", "STA", "AP", "STA+AP" };
-    p.print(F("Mode: "));
+    const char* modes[] = { "NULL", "STA", "AP", "STA+AP" };
+    p.print("Mode: ");
     p.println(modes[wifi_get_opmode()]);
 
-    const char* const phymodes[] = { "", "B", "G", "N" };
-    p.print(F("PHY mode: "));
+    const char* phymodes[] = { "", "B", "G", "N" };
+    p.print("PHY mode: ");
     p.println(phymodes[(int) wifi_get_phy_mode()]);
 
-    p.print(F("Channel: "));
+    p.print("Channel: ");
     p.println(wifi_get_channel());
 
-    p.print(F("AP id: "));
+    p.print("AP id: ");
     p.println(wifi_station_get_current_ap_id());
 
-    p.print(F("Status: "));
+    p.print("Status: ");
     p.println(wifi_station_get_connect_status());
 
-    p.print(F("Auto connect: "));
+    p.print("Auto connect: ");
     p.println(wifi_station_get_auto_connect());
 
     struct station_config conf;
@@ -75,14 +75,22 @@ void ESP8266WiFiClass::printDiag(Print& p) {
     char ssid[33]; //ssid can be up to 32chars, => plus null term
     memcpy(ssid, conf.ssid, sizeof(conf.ssid));
     ssid[32] = 0; //nullterm in case of 32 char ssid
-    p.printf_P(PSTR("SSID (%zu): %s\n"), strlen(ssid), ssid);
+ 
+    p.print("SSID (");
+    p.print(strlen(ssid));
+    p.print("): ");
+    p.println(ssid);
 
     char passphrase[65];
     memcpy(passphrase, conf.password, sizeof(conf.password));
     passphrase[64] = 0;
-    p.printf_P(PSTR("Passphrase (%zu): %s\n"), strlen(passphrase), passphrase);
 
-    p.print(F("BSSID set: "));
+    p.print("Passphrase (");
+    p.print(strlen(passphrase));
+    p.print("): ");
+    p.println(passphrase);
+
+    p.print("BSSID set: ");
     p.println(conf.bssid_set);
 
 }

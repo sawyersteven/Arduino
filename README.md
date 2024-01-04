@@ -1,3 +1,12 @@
+This is a modification of the Arduino 8266 library to restore compatibility with a Wemos D1 Mini clone I have.
+
+The problem this is intended to address is a lack of stability in connecting to a wifi network. Using the latest version of this repo causes the wifi connection to stall for arbitrary amounts of time before connecting, if a connection is able to be made at all.
+
+Version 2.5.2 of this library creates a reliable wifi connection to my network. Therefore this fork was created to combine the 2.5.2 WiFi libraries with the current 8266 package, allowing compatibility with libraries that require newer features (eg LittleFS, which was not yet introduced in 2.5.2)
+
+
+Original README starts here:
+
 Arduino core for ESP8266 WiFi chip
 ===========================================
 

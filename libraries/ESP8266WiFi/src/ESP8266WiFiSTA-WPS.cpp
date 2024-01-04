@@ -30,8 +30,6 @@
 
 static void wifi_wps_status_cb(wps_cb_status status);
 
-static bool _wps_config_pending = false;
-
 /**
  * WPS config
  * so far only WPS_TYPE_PBC is supported (SDK 1.2.0)
@@ -72,9 +70,8 @@ bool ESP8266WiFiSTAClass::beginWPSConfig(void) {
         return false;
     }
 
-    _wps_config_pending = true;
-    // will resume when wifi_wps_status_cb fires
-    esp_suspend([]() { return _wps_config_pending; });
+    esp_yield();
+    // will return here when wifi_wps_status_cb fires
 
     return true;
 }
@@ -110,6 +107,5 @@ void wifi_wps_status_cb(wps_cb_status status) {
     }
     // TODO user function to get status
 
-    _wps_config_pending = false; // resume beginWPSConfig
-    esp_schedule();
+    esp_schedule(); // resume the beginWPSConfig function
 }

@@ -24,8 +24,8 @@
 #define _BEARSSLHELPERS_H
 
 #include <bearssl/bearssl.h>
-#include <StackThunk.h>
 #include <Updater.h>
+
 
 // Internal opaque structures, not needed by user applications
 namespace brssl {
@@ -43,8 +43,6 @@ class PublicKey {
     PublicKey();
     PublicKey(const char *pemKey);
     PublicKey(const uint8_t *derKey, size_t derLen);
-    PublicKey(Stream& stream, size_t size);
-    PublicKey(Stream& stream) : PublicKey(stream, stream.available()) { };
     ~PublicKey();
 
     bool parse(const char *pemKey);
@@ -58,7 +56,6 @@ class PublicKey {
 
     // Disable the copy constructor, we're pointer based
     PublicKey(const PublicKey& that) = delete;
-    PublicKey& operator=(const PublicKey& that) = delete;
 
   private:
     brssl::public_key *_key;
@@ -72,8 +69,6 @@ class PrivateKey {
     PrivateKey();
     PrivateKey(const char *pemKey);
     PrivateKey(const uint8_t *derKey, size_t derLen);
-    PrivateKey(Stream& stream, size_t size);
-    PrivateKey(Stream& stream) : PrivateKey(stream, stream.available()) { };
     ~PrivateKey();
 
     bool parse(const char *pemKey);
@@ -87,7 +82,6 @@ class PrivateKey {
 
     // Disable the copy constructor, we're pointer based
     PrivateKey(const PrivateKey& that) = delete;
-    PrivateKey& operator=(const PrivateKey& that) = delete;
 
   private:
     brssl::private_key *_key;
@@ -104,8 +98,6 @@ class X509List {
     X509List();
     X509List(const char *pemCert);
     X509List(const uint8_t *derCert, size_t derLen);
-    X509List(Stream& stream, size_t size);
-    X509List(Stream& stream) : X509List(stream, stream.available()) { };
     ~X509List();
 
     bool append(const char *pemCert);
@@ -124,7 +116,6 @@ class X509List {
 
     // Disable the copy constructor, we're pointer based
     X509List(const X509List& that) = delete;
-    X509List& operator=(const X509List& that) = delete;
 
   private:
     size_t _count;
@@ -136,59 +127,15 @@ class X509List {
 // significantly faster.  Completely optional.
 class WiFiClientSecure;
 
-// Cache for a TLS session with a server
-// Use with BearSSL::WiFiClientSecure::setSession
-// to accelerate the TLS handshake
 class Session {
-  friend class WiFiClientSecureCtx;
+  friend class WiFiClientSecure;
 
   public:
     Session() { memset(&_session, 0, sizeof(_session)); }
   private:
     br_ssl_session_parameters *getSession() { return &_session; }
-    // The actual BearSSL session information
+    // The actual BearSSL ession information
     br_ssl_session_parameters _session;
-};
-
-// Represents a single server session.
-// Use with BearSSL::ServerSessions.
-typedef uint8_t ServerSession[100];
-
-// Cache for the TLS sessions of multiple clients.
-// Use with BearSSL::WiFiServerSecure::setCache
-class ServerSessions {
-  friend class WiFiClientSecureCtx;
-
-  public:
-    // Uses the given buffer to cache the given number of sessions and initializes it.
-    ServerSessions(ServerSession *sessions, uint32_t size) : ServerSessions(sessions, size, false) {}
-
-    // Dynamically allocates a cache for the given number of sessions and initializes it.
-    // If the allocation of the buffer wasn't successful, the value
-    // returned by size() will be 0.
-    ServerSessions(uint32_t size) : ServerSessions(size > 0 ? new ServerSession[size] : nullptr, size, true) {}
-
-    ~ServerSessions();
-
-    // Returns the number of sessions the cache can hold.
-    uint32_t size() { return _size; }
-
-  private:
-    ServerSessions(ServerSession *sessions, uint32_t size, bool isDynamic);
-
-    // Returns the cache's vtable or null if the cache has no capacity.
-    const br_ssl_session_cache_class **getCache();
-
-    // Size of the store in sessions.
-    uint32_t _size;
-    // Store where the information for the sessions are stored.
-    ServerSession *_store;
-    // Whether the store is dynamically allocated.
-    // If this is true, the store needs to be freed in the destructor.
-    bool _isDynamic;
-
-    // Cache of the server using the _store.
-    br_ssl_session_cache_lru _cache;
 };
 
 // Updater SHA256 hash and signature verification
@@ -199,7 +146,6 @@ class HashSHA256 : public UpdaterHashClass {
     virtual void end() override;
     virtual int len() override;
     virtual const void *hash() override;
-    virtual const unsigned char *oid() override;
   private:
     br_sha256_context _cc;
     unsigned char _sha256[32];
@@ -211,13 +157,12 @@ class SigningVerifier : public UpdaterVerifyClass {
     virtual bool verify(UpdaterHashClass *hash, const void *signature, uint32_t signatureLen) override;
 
   public:
-    SigningVerifier(PublicKey *pubKey) { _pubKey = pubKey; stack_thunk_add_ref(); }
-    ~SigningVerifier() { stack_thunk_del_ref(); }
+    SigningVerifier(PublicKey *pubKey) { _pubKey = pubKey; }
 
   private:
     PublicKey *_pubKey;
 };
-
+  
 // Stack thunked versions of calls
 extern "C" {
 extern unsigned char *thunk_br_ssl_engine_recvapp_buf( const br_ssl_engine_context *cc, size_t *len);
